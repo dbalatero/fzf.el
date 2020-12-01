@@ -1,3 +1,9 @@
+# fzf.el [![MELPA](https://melpa.org/packages/fzf-badge.svg)](https://melpa.org/#/fzf)
+
+An Emacs front-end for [fzf][1].
+
+![demo](https://cloud.githubusercontent.com/assets/306502/12380684/ca0a6648-bd46-11e5-9091-841b282874e4.gif)
+
 # My fork
 
 This is a fork of bling/fzf.el. It looks like it was abandoned and stopped taking PRs, so I made some updates:
@@ -36,12 +42,6 @@ If you have a custom binary install, you can set it with:
 ```elisp
 (setq fzf/proximity-sort-executable "/path/to/proximity-sort")
 ```
-
-# fzf.el [![MELPA](https://melpa.org/packages/fzf-badge.svg)](https://melpa.org/#/fzf)
-
-An Emacs front-end for [fzf][1].
-
-![demo](https://cloud.githubusercontent.com/assets/306502/12380684/ca0a6648-bd46-11e5-9091-841b282874e4.gif)
 
 # installation
 
