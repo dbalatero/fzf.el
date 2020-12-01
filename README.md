@@ -43,6 +43,36 @@ If you have a custom binary install, you can set it with:
 (setq fzf/proximity-sort-executable "/path/to/proximity-sort")
 ```
 
+# dependencies
+  
+Required:
+* `brew install fzf`
+
+Optional but recommended:
+
+* `brew install ripgrep`
+* `proximity-sort`
+
+```sh
+#######
+# Installing proximity-sort gets you better search results on huge monorepos, as all searches
+# are relative to your current open buffer.
+#######
+
+brew install rustup
+rustup-init -y
+source $HOME/.cargo/env
+
+# add Rust's cargo bin directory to your $PATH
+echo '[ -f $HOME/.cargo/env ] && source $HOME/.cargo/env' > \
+  ~/.bashrc  # or ~/.zshrc, etc
+  
+cargo install proximity-sort
+
+# reload your shell
+exec $SHELL
+```
+
 # installation
 
 If you use straight / doom emacs for packages, you can add this fork with:
