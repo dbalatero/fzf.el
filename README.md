@@ -45,7 +45,11 @@ If you have a custom binary install, you can set it with:
 
 # installation
 
-fzf.el can be installed through [MELPA][2].
+If you use straight / doom emacs for packages, you can add this fork with:
+
+```elisp
+(package! fzf :recipe (:host github :repo "dbalatero/fzf.el"))
+```
 
 # usage
 
