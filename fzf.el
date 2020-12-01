@@ -61,7 +61,7 @@
   :type 'string
   :group 'fzf)
 
-(defcustom fzf/args "-x --color bw --print-query"
+(defcustom fzf/args "--tiebreak=index --print-query"
   "Additional arguments to pass into fzf."
   :type 'string
   :group 'fzf)
@@ -81,6 +81,30 @@
   :type 'string
   :group 'fzf)
 
+(defcustom fzf/files-source "find"
+  "The source to use for finding files. Can be one of 'find' (find . -path), 'ripgrep' (rg --files), 'git' (git ls-files), or 'custom'."
+  :type 'string
+  :group 'fzf)
+
+(defcustom fzf/files-source-custom-command nil
+  "The source command to pipe for searching for files with FZF"
+  :type 'string
+  :group 'fzf)
+
+(defcustom fzf/proximity-sort-executable (concat (getenv "HOME") "/.cargo/bin/proximity-sort")
+  "The path to proximity-sort to use"
+  :type 'string
+  :group 'fzf)
+
+(defvar fzf-mode-map
+  (let ((map (make-sparse-keymap)))
+    ;; bind only the keys we need
+    (define-key map (kbd "<escape>") 'term-kill-subjob)
+    (define-key map (kbd "C-c") 'term-kill-subjob)
+    (define-key map (kbd "C-s") 'term-sent-raw)
+    (define-key map (kbd "C-v") 'term-sent-raw)
+    map))
+
 (defun fzf/grep-cmd (cmd args)
   (format (concat cmd " " args)
           (shell-quote-argument
@@ -88,42 +112,85 @@
                (buffer-substring-no-properties (region-beginning) (region-end))
              (read-from-minibuffer (concat cmd ": "))))))
 
+(define-derived-mode fzf-mode
+  term-mode "FZF"
+  "Major mode for FZF finder.")
+
+(defun fzf/current-relative-file (directory)
+  (let* ((current-file (buffer-file-name)))
+    (if (and current-file (file-exists-p current-file))
+        (string-remove-prefix directory (buffer-file-name))
+      nil)))
+
+(defun fzf/proximity-sort-command (directory)
+  (let* ((current-file (fzf/current-relative-file directory))
+         (relative-dir (if current-file (file-name-directory current-file) nil))
+         (in-project-root (or (equal "" relative-dir) (not relative-dir)))
+         (proximity-sort-command-available (file-executable-p fzf/proximity-sort-executable)))
+    (if (and current-file (not in-project-root) proximity-sort-command-available)
+        (concat fzf/proximity-sort-executable " " current-file)
+      nil)))
+
 (defun fzf/after-term-handle-exit (process-name msg)
   (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
          (lines (split-string text "\n" t "\s*>\s+"))
-         (line (car (last (butlast lines 1))))
-         (selected (split-string line ":"))
+         (last-line (car (last (butlast lines 1))))
+         (selected (split-string last-line ":"))
          (file (expand-file-name (pop selected)))
-         (linenumber (pop selected)))
+         (linenumber (pop selected))
+         (key-press (car (last (butlast lines 2)))))
     (kill-buffer "*fzf*")
     (jump-to-register :fzf-windows)
+
     (when (file-exists-p file)
+      (when (equal key-press "ctrl-s")
+        (split-window-below)
+        (windmove-down))
+
+      (when (equal key-press "ctrl-v")
+        (split-window-right)
+        (windmove-right))
+
       (find-file file))
+
     (when linenumber
       (goto-char (point-min))
       (forward-line (- (string-to-number linenumber) 1))
-      (back-to-indentation)))
-  (advice-remove 'term-handle-exit #'fzf/after-term-handle-exit))
+      (back-to-indentation))
+
+  (advice-remove 'term-handle-exit #'fzf/after-term-handle-exit)))
 
 (defun fzf/start (directory &optional cmd-stream)
+  ;; kill any orphaned buffers
+  (when (get-buffer "*fzf*")
+    (kill-buffer "*fzf*"))
+
   (require 'term)
   (window-configuration-to-register :fzf-windows)
   (advice-add 'term-handle-exit :after #'fzf/after-term-handle-exit)
+
   (let* ((buf (get-buffer-create "*fzf*"))
          (min-height (min fzf/window-height (/ (window-height) 2)))
          (window-height (if fzf/position-bottom (- min-height) min-height))
-         (window-system-args (when window-system " --margin=1,0"))
-         (fzf-args (concat fzf/args window-system-args))
-         (sh-cmd (if cmd-stream (concat cmd-stream " | " fzf/executable " " fzf-args)
-                   (concat fzf/executable " " fzf-args))))
+         (window-system-args (when window-system " --no-height --margin=1,0"))
+         (kb-args " --expect=ctrl-v,ctrl-s")
+         (fzf-args (concat fzf/args window-system-args kb-args))
+         (fzf-command (concat fzf/executable " " fzf-args))
+         (proximity-sort-command (if cmd-stream (fzf/proximity-sort-command directory) nil))
+         (commands (remove nil (list cmd-stream proximity-sort-command fzf-command)))
+         (sh-cmd (string-join commands " | ")))
+
     (with-current-buffer buf
       (setq default-directory directory))
+
     (split-window-vertically window-height)
     (when fzf/position-bottom (other-window 1))
+
     (make-term "fzf" "sh" nil "-c" sh-cmd)
     (switch-to-buffer buf)
-    (linum-mode 0)
-    (visual-line-mode 0)
+
+    (linum-mode 0) (visual-line-mode 0)
+    (fzf-mode)
 
     ;; disable various settings known to cause artifacts, see #1 for more details
     (setq-local scroll-margin 0)
@@ -136,37 +203,34 @@
     (term-char-mode)
     (setq mode-line-format (format "   FZF  %s" directory))))
 
+(defun fzf/get-files-source ()
+  (cond ((equal "find" fzf/files-source)
+                "find . -path '*/\.*' -prune -o -type f -print -o -type l -print | sed 's:^..::'")
+                ((equal "ripgrep" fzf/files-source)
+                "rg --files --hidden --ignore --glob '!{node_modules/*,.git/*}'")
+                ((equal "git" fzf/files-source)
+                "git ls-files")
+                ((equal "custom" fzf/files-source)
+                fzf/files-source-custom-command)
+                (t nil)))
+
+(defun fzf/git-files ()
+  (let ((path (locate-dominating-file default-directory ".git")))
+    (if path
+        (fzf/start path "git ls-files")
+      (user-error "Not inside a Git repository"))))
+
 (defun fzf/vcs (match)
   (let ((path (locate-dominating-file default-directory match)))
     (if path
-        (fzf/start path)
+        (fzf/start path (fzf/get-files-source))
       (fzf-directory))))
-
-(defun fzf/git-files ()
-  (let ((process-environment
-         (cons (concat "FZF_DEFAULT_COMMAND=git ls-files")
-               process-environment))
-        (path (locate-dominating-file default-directory ".git")))
-    (if path
-        (fzf/start path)
-      (user-error "Not inside a Git repository"))))
-
-;;;###autoload
-(defun fzf ()
-  "Starts a fzf session."
-  (interactive)
-  (if (fboundp #'projectile-project-root)
-      (fzf/start (condition-case err
-                     (projectile-project-root)
-                   (error
-                    default-directory)))
-    (fzf/start default-directory)))
 
 ;;;###autoload
 (defun fzf-directory ()
   "Starts a fzf session at the specified directory."
   (interactive)
-  (fzf/start (ido-read-directory-name "Directory: " fzf/directory-start)))
+  (fzf/start (ido-read-directory-name "Directory: " fzf/directory-start) (fzf/get-files-source)))
 
 ;;;###autoload
 (defun fzf-git ()
@@ -182,8 +246,8 @@
 
 ;;;###autoload
 (defun fzf-hg ()
-  "Starts a fzf session at the root of the curreng hg."
-  (interactive)
+  "Starts a fzf session at the root of the current hg."
+  (interactiv)
   (fzf/vcs ".hg"))
 
 ;;;###autoload
@@ -191,7 +255,7 @@
   "Starts a fzf session at the root of the projectile project."
   (interactive)
   (require 'projectile)
-  (fzf/start (projectile-project-root)))
+  (fzf/start (projectile-project-root) (fzf/get-files-source)))
 
 ;;;###autoload
 (defun fzf-git-grep ()
@@ -201,5 +265,11 @@
   (fzf/start (locate-dominating-file default-directory ".git")
              (fzf/grep-cmd "git grep" fzf/git-grep-args)))
 
+;;;###autoload
+(defun fzf-current-directory ()
+  "Starts a fzf session from the current directory"
+  (interactive)
+  (fzf/start "." (fzf/get-files-source)))
+
 (provide 'fzf)
-;;; fzf.el ends here
+
